@@ -23,6 +23,19 @@ struct MyJoinHandler;
 const NAMES: &str = "CatSeedLogin";
 const DESCRIPTION: &str = "Login plugin for CatSeed";
 
+#[plugin_impl]
+pub struct MyPlugin {}
+
+#[with_runtime(global)]
+#[async_trait]
+impl EventHandler<PlayerJoinEvent> for MyJoinHandler {
+    async fn handle_blocking(&self, _server: &Arc<Server>, event: &mut PlayerJoinEvent) {
+        event.join_message =
+            TextComponent::text(format!("欢迎游玩, {}!", event.player.gameprofile.name))
+                .color_named(NamedColor::Green);
+    }
+}
+
 #[plugin_method] 
 async fn on_load(&mut self, server: Arc<Context>) -> Result<(), String> {
     pumpkin::init_log!(); 
@@ -35,19 +48,6 @@ async fn on_load(&mut self, server: Arc<Context>) -> Result<(), String> {
     server.register_command(command, PermissionLvl::Zero).await;
     Ok(())
 }
-
-#[with_runtime(global)]
-#[async_trait]
-impl EventHandler<PlayerJoinEvent> for MyJoinHandler {
-    async fn handle_blocking(&self, _server: &Arc<Server>, event: &mut PlayerJoinEvent) {
-        event.join_message =
-            TextComponent::text(format!("欢迎游玩, {}!", event.player.gameprofile.name))
-                .color_named(NamedColor::Green);
-    }
-}
-
-#[plugin_impl]
-pub struct MyPlugin {}
 
 impl MyPlugin {
     pub fn new() -> Self {
