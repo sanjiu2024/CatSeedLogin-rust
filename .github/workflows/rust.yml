@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
-  RUSTFLAGS: "-A warnings"  # 关键修改：允许警告
+  RUSTFLAGS: "-A warnings"  # 忽略警告，只报错误
 
 jobs:
   build:
@@ -44,11 +44,33 @@ jobs:
 
     - name: Add Rust target
       run: rustup target add ${{ matrix.target }}
+      shell: bash
 
-    - name: Build release
+    - name: Fix unused imports automatically
+      shell: bash
+      run: |
+        # 尝试自动修复未使用的导入
+        cargo fix --allow-dirty --allow-staged || echo "Fix attempted, continuing build..."
+
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build release (allow warnings)
       run: cargo build --release --target ${{ matrix.target }}
+      shell: bash
+      env:
+        RUSTFLAGS: "-A warnings"  # 忽略警告继续构建
 
-    - name: Find and prepare library file
+    - name: Find library file
+      shell: bash
       run: |
         # 查找构建出的库文件
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
@@ -71,24 +93,19 @@ jobs:
         echo "Found library: $LIB_FILE"
         
         # 准备发布文件名
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
-        else
-          VERSION="${GITHUB_SHA:0:7}"
-        fi
+        VERSION=${GITHUB_REF#refs/tags/v}
+        PACKAGE_NAME=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].name' 2>/dev/null || echo "library")
+        ARTIFACT_NAME="${PACKAGE_NAME}_${{ matrix.artifact_name }}_v${VERSION}.${{ matrix.file_extension }}"
         
-        PACKAGE_NAME=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].name' 2>/dev/null || echo "CatSeedLogin-rust")
-        ARTIFACT_NAME="${PACKAGE_NAME}_${{ matrix.artifact_name }}_${VERSION}.${{ matrix.file_extension }}"
-        
-        mkdir -p dist
-        cp "$LIB_FILE" "dist/$ARTIFACT_NAME"
+        cp "$LIB_FILE" "$ARTIFACT_NAME"
         echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_ENV
+        echo "Artifact: $ARTIFACT_NAME"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact_name }}-library
-        path: dist/${{ env.artifact_name }}
+        path: ${{ env.artifact_name }}
         retention-days: 5
 
   create-release:
