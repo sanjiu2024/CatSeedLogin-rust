@@ -10,7 +10,7 @@ env:
   RUST_BACKTRACE: full
 
 jobs:
-  build-and-release:
+  build:
     name: Build for ${{ matrix.os }} (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     
@@ -29,21 +29,24 @@ jobs:
             target: x86_64-apple-darwin
             artifact_name: macos
             file_extension: dylib
+      fail-fast: false  # 重要：一个平台失败不影响其他平台
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
-    - name: Install Rust toolchain
+    - name: Install Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: stable
-        targets: ${{ matrix.target }}
+        target: ${{ matrix.target }}  # 确保安装对应目标平台
         profile: minimal
 
-    - name: Cache cargo registry
+    - name: Add Rust target explicitly
+      run: rustup target add ${{ matrix.target }}
+      shell: bash
+
+    - name: Cache dependencies
       uses: actions/cache@v3
       with:
         path: |
@@ -54,52 +57,41 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
-    - name: Build release binary
-      shell: bash  # 强制使用bash，避免PowerShell语法问题
-      run: |
-        echo "Building for target: ${{ matrix.target }}"
-        cargo build --release --target ${{ matrix.target }}
-        
-        # 只在Linux和macOS上设置执行权限
-        if [ "${{ matrix.os }}" != "windows-latest" ]; then
-          echo "Setting executable permissions for ${{ matrix.os }}"
-          chmod +x target/${{ matrix.target }}/release/*.${{ matrix.file_extension }}
-        else
-          echo "Skipping chmod on Windows"
-        fi
+    - name: Build release
+      run: cargo build --release --target ${{ matrix.target }}
+      shell: bash
 
-    - name: Extract library filename from Cargo.toml
-      id: lib_name
+    - name: Find and prepare library file
       shell: bash
       run: |
-        # 从Cargo.toml获取包名，并将连字符转换为下划线作为库名
-        PACKAGE_NAME=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].name')
-        LIBRARY_BASE_NAME=$(echo $PACKAGE_NAME | sed 's/-/_/g')
-        
-        # 根据平台确定最终文件名
+        # 查找构建出的库文件
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          LIBRARY_FILE="${LIBRARY_BASE_NAME}.${{ matrix.file_extension }}"
+          LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.dll" -type f | head -1)
+        elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+          LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.so" -type f | head -1)
         else
-          LIBRARY_FILE="lib${LIBRARY_BASE_NAME}.${{ matrix.file_extension }}"
+          LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.dylib" -type f | head -1)
         fi
         
-        echo "library_file=$LIBRARY_FILE" >> $GITHUB_OUTPUT
-        echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
-        echo "Built library: $LIBRARY_FILE"
-
-    - name: Rename and prepare artifact
-      shell: bash
-      run: |
-        # 复制库文件到工作目录
-        cp target/${{ matrix.target }}/release/${{ steps.lib_name.outputs.library_file }} .
+        if [ -z "$LIB_FILE" ]; then
+          echo "No library file found!"
+          exit 1
+        fi
         
-        # 创建包含版本信息的文件名
+        echo "Found library: $LIB_FILE"
+        
+        # 设置执行权限（非Windows）
+        if [ "${{ matrix.os }}" != "windows-latest" ]; then
+          chmod +x "$LIB_FILE"
+        fi
+        
+        # 准备发布文件名
         VERSION=${GITHUB_REF#refs/tags/v}
-        ARTIFACT_NAME="${{ steps.lib_name.outputs.package_name }}_${{ matrix.artifact_name }}_v${VERSION}.${{ matrix.file_extension }}"
+        PACKAGE_NAME=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].name')
+        ARTIFACT_NAME="${PACKAGE_NAME}_${{ matrix.artifact_name }}_v${VERSION}.${{ matrix.file_extension }}"
         
-        mv ${{ steps.lib_name.outputs.library_file }} $ARTIFACT_NAME
+        cp "$LIB_FILE" "$ARTIFACT_NAME"
         echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_ENV
-        echo "Artifact prepared: $ARTIFACT_NAME"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -111,7 +103,7 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: build-and-release
+    needs: build
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
@@ -120,11 +112,14 @@ jobs:
       with:
         path: ./artifacts
 
-    - name: List downloaded artifacts
-      run: ls -la ./artifacts/
+    - name: List artifacts
+      run: |
+        find ./artifacts -type f -name "*" | while read file; do
+          echo "Found: $file"
+          ls -la "$file"
+        done
 
     - name: Create Release
-      id: create_release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref }}
@@ -132,26 +127,7 @@ jobs:
         draft: false
         prerelease: false
         generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload Windows artifact to release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ./artifacts/windows-library/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload Linux artifact to release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ./artifacts/linux-library/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload macOS artifact to release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ./artifacts/macos-library/*
+        files: |
+          ./artifacts/**/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
