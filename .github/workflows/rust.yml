@@ -161,16 +161,36 @@ jobs:
         echo "构件已上传至 GitHub Actions Artifacts，可在右侧「Artifacts」区域下载：" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        # 列出所有构建的文件
+        # 修复：完整的if语句，检查文件是否存在
         echo "### 可用平台:" >> $GITHUB_STEP_SUMMARY
-        if [ -f "./artifacts        
+        
+        #检查Windows文件
+        if [ -f "./artifacts/CatSeedLogin_v${VERSION}_windows.dll" ]; then
+          echo "- ✅ Windows (x64) - CatSeedLogin_v${VERSION}_windows.dll" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ❌ Windows 构建失败" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # 检查Linux文件
+        if [ -f "./artifacts/CatSeedLogin_v${VERSION}_linux.so" ]; then
+          echo "- ✅ Linux (x64) - CatSeedLogin_v${VERSION}_linux.so" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ❌ Linux 构建失败" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # 检查macOS文件
+        if [ -f "./artifacts/CatSeedLogin_v${VERSION}_macos.dylib" ]; then
+          echo "- ✅ macOS (x64) - CatSeedLogin_v${VERSION}_macos.dylib" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ❌ macOS 构建失败" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🚀 使用说明" >> $GITHUB_STEP_SUMMARY
+        echo "1. 下载对应平台的库文件" >> $GITHUB_STEP_SUMMARY
+        echo "2. 将文件放入 Pumpkin 服务器的 plugins 目录" >> $GITHUB_STEP_SUMMARY
+        echo "3. 重启服务器" >> $GITHUB_STEP_SUMMARY
+        
         # 同时输出到日志
         echo "构建完成: CatSeedLogin v${VERSION}"
         echo "更新内容: ${CHANGELOG}"
-
-    - name: Upload summary as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-summary-v${{ github.event.inputs.version || '0.0.1' }}
-        path: $GITHUB_STEP_SUMMARY
-        retention-days: 30
