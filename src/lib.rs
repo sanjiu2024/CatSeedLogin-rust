@@ -23,9 +23,6 @@ struct MyJoinHandler;
 const NAMES: &str = "CatSeedLogin";
 const DESCRIPTION: &str = "Login plugin for CatSeed";
 
-#[plugin_impl]
-pub struct MyPlugin {}
-
 #[with_runtime(global)]
 #[async_trait]
 impl EventHandler<PlayerJoinEvent> for MyJoinHandler {
@@ -48,6 +45,9 @@ async fn on_load(&mut self, server: Arc<Context>) -> Result<(), String> {
     server.register_command(command, PermissionLvl::Zero).await;
     Ok(())
 }
+
+#[plugin_impl]
+pub struct MyPlugin {}
 
 impl MyPlugin {
     pub fn new() -> Self {
