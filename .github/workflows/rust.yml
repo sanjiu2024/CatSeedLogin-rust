@@ -2,12 +2,12 @@ name: Build and Release Rust Library
 
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:
+    tags: ['v*']  # 当推送v开头的tag时触发
+  workflow_dispatch:  # 允许手动触发
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
-  RUSTFLAGS: "-A warnings"  # 忽略警告，只报错误
+  RUSTFLAGS: "-A warnings"  # 允许警告，不阻止构建
 
 jobs:
   build:
@@ -44,13 +44,6 @@ jobs:
 
     - name: Add Rust target
       run: rustup target add ${{ matrix.target }}
-      shell: bash
-
-    - name: Fix unused imports automatically
-      shell: bash
-      run: |
-        # 尝试自动修复未使用的导入
-        cargo fix --allow-dirty --allow-staged || echo "Fix attempted, continuing build..."
 
     - name: Cache dependencies
       uses: actions/cache@v3
@@ -63,24 +56,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
-    - name: Build release (allow warnings)
+    - name: Build release
       run: cargo build --release --target ${{ matrix.target }}
-      shell: bash
-      env:
-        RUSTFLAGS: "-A warnings"  # 忽略警告继续构建
 
-    - name: Find library file
+    - name: Find and prepare library file
       shell: bash
       run: |
         # 查找构建出的库文件
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          find target/${{ matrix.target }}/release -name "*.dll" | head -1
           LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.dll" -type f | head -1)
         elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-          find target/${{ matrix.target }}/release -name "*.so" | head -1
           LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.so" -type f | head -1)
         else
-          find target/${{ matrix.target }}/release -name "*.dylib" | head -1
           LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.dylib" -type f | head -1)
         fi
         
@@ -93,40 +80,73 @@ jobs:
         echo "Found library: $LIB_FILE"
         
         # 准备发布文件名
-        VERSION=${GITHUB_REF#refs/tags/v}
-        PACKAGE_NAME=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].name' 2>/dev/null || echo "library")
-        ARTIFACT_NAME="${PACKAGE_NAME}_${{ matrix.artifact_name }}_v${VERSION}.${{ matrix.file_extension }}"
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION="${GITHUB_SHA:0:7}"
+        fi
         
-        cp "$LIB_FILE" "$ARTIFACT_NAME"
+        PACKAGE_NAME=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].name' 2>/dev/null || echo "CatSeedLogin-rust")
+        ARTIFACT_NAME="${PACKAGE_NAME}_${{ matrix.artifact_name }}_${VERSION}.${{ matrix.file_extension }}"
+        
+        mkdir -p dist
+        cp "$LIB_FILE" "dist/$ARTIFACT_NAME"
         echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_ENV
-        echo "Artifact: $ARTIFACT_NAME"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact_name }}-library
-        path: ${{ env.artifact_name }}
+        path: dist/${{ env.artifact_name }}
         retention-days: 5
 
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    # 修改条件：手动触发时也创建发布
+    if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped')
     
     steps:
+    - name: Check if we should create release
+      id: check_release
+      shell: bash
+      run: |
+        # 检查是否有构建成功的构件
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          echo "should_create_release=true" >> $GITHUB_OUTPUT
+        else
+          echo "should_create_release=false" >> $GITHUB_OUTPUT
+        fi
+
     - name: Download artifacts
+      if: steps.check_release.outputs.should_create_release == 'true'
       uses: actions/download-artifact@v4
       with:
         path: ./artifacts
 
-    - name: Create Release
+    - name: Create Release for Tag
+      if: steps.check_release.outputs.should_create_release == 'true' && startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref }}
         release_name: Release ${{ github.ref }}
         draft: false
         prerelease: false
+        generate_release_notes: true
+        files: |
+          ./artifacts/**/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release for Manual Trigger
+      if: steps.check_release.outputs.should_create_release == 'true' && github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: manual-${{ github.run_id }}
+        release_name: Manual Release ${{ github.run_id }}
+        draft: true
+        prerelease: true
         generate_release_notes: true
         files: |
           ./artifacts/**/*
