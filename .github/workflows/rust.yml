@@ -3,56 +3,16 @@ name: Build CatSeedLogin Plugin
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUSTFLAGS: "-A warnings"
 
 jobs:
-  get-version:
-    name: Get Version and Commit Info
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get-version.outputs.version }}
-      commit_message: ${{ steps.get-commit-info.outputs.commit_message }}
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1  # 只获取最近一次提交
-    
-    - name: Extract version from Cargo.toml
-      id: get-version
-      shell: bash
-      run: |
-        # 从Cargo.toml文件中提取版本号
-        if [ -f "Cargo.toml" ]; then
-          VERSION=$(grep -E '^version\s*=' Cargo.toml | head -1 | cut -d'"' -f2)
-          echo "从Cargo.toml中提取的版本号: $VERSION"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-        else
-          echo "错误: 未找到Cargo.toml文件"
-          exit 1
-        fi
-    
-    - name: Get latest commit message
-      id: get-commit-info
-      shell: bash
-      run: |
-        # 获取最近一次提交信息，并处理换行符和特殊字符
-        COMMIT_MESSAGE=$(git log -1 --pretty=%B | tr '\n' ' ' | sed 's/"/\\"/g' | sed 's/`/\\`/g')
-        echo "最近一次提交信息: $COMMIT_MESSAGE"
-        
-        # 使用环境文件设置输出，避免特殊字符问题
-        echo "commit_message<<EOF" >> $GITHUB_OUTPUT
-        echo "$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
   build:
     name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    needs: get-version
     
     strategy:
       matrix:
@@ -74,8 +34,23 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 1  # 只获取最近一次提交
+
+    - name: Get version from Cargo.toml
+      id: version
+      shell: bash
+      run: |
+        VERSION=$(grep -E '^version\s*=' Cargo.toml | head -1 | cut -d'"' -f2)
+        echo "version=$VERSION" >> $GITHUB_ENV
+        echo "Version: $VERSION"
+
+    - name: Get commit message
+      id: commit
+      shell: bash
+      run: |
+        # 只获取提交标题，避免换行符问题
+        COMMIT_MSG=$(git log -1 --pretty=%s)
+        echo "commit_msg=$COMMIT_MSG" >> $GITHUB_ENV
+        echo "Commit: $COMMIT_MSG"
 
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -87,119 +62,57 @@ jobs:
     - name: Add Rust target
       run: rustup target add ${{ matrix.target }}
 
-    - name: Cache dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
-
     - name: Build release
       run: cargo build --release --target ${{ matrix.target }}
 
-    - name: Find library file
+    - name: Find and copy library
       shell: bash
       run: |
-        # 查找构建出的库文件
+        # 简化文件查找逻辑
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.dll" -type f | head -1)
+          EXT="dll"
         elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-          LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.so" -type f | head -1)
+          EXT="so"
         else
-          LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.dylib" -type f | head -1)
+          EXT="dylib"
         fi
         
+        LIB_FILE=$(find target/${{ matrix.target }}/release -name "*.$EXT" -type f | head -1)
+        
         if [ -z "$LIB_FILE" ]; then
-          echo "❌ 未找到库文件，检查所有文件:"
+          echo "Error: No library file found"
           find target/${{ matrix.target }}/release -type f
           exit 1
         fi
         
-        echo "✅ 找到库文件: $LIB_FILE"
-        
-        # 准备文件名
-        VERSION="${{ needs.get-version.outputs.version }}"
-        ARTIFACT_NAME="CatSeedLogin_v${VERSION}_${{ matrix.platform }}.${{ matrix.file_extension }}"
-        
+        ARTIFACT_NAME="CatSeedLogin_v${{ env.version }}_${{ matrix.platform }}.$EXT"
         mkdir -p dist
         cp "$LIB_FILE" "dist/$ARTIFACT_NAME"
         echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_ENV
-        echo "version=$VERSION" >> $GITHUB_ENV
 
-    - name: Upload to CI Artifacts
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: CatSeedLogin-v${{ env.version }}-${{ matrix.platform }}
         path: dist/${{ env.artifact_name }}
         retention-days: 90
 
-  create-summary:
-    name: Create Build Summary
+  summary:
+    name: Create Summary
     runs-on: ubuntu-latest
-    needs: [get-version, build]
-    if: always()
+    needs: build
     
     steps:
-    - name: Download all artifacts
+    - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
         path: ./artifacts
-        pattern: CatSeedLogin-*
-        merge-multiple: true
 
     - name: Create summary
       shell: bash
       run: |
-        VERSION="${{ needs.get-version.outputs.version }}"
-        COMMIT_MESSAGE="${{ needs.get-version.outputs.commit_message }}"
-        
-        echo "# 🐱 CatSeedLogin v${VERSION} 构建完成" >> $GITHUB_STEP_SUMMARY
+        echo "# CatSeedLogin v${{ env.version }} Build Complete" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "## 📋 构建信息" >> $GITHUB_STEP_SUMMARY
-        echo "- **版本**: v${VERSION}" >> $GITHUB_STEP_SUMMARY
-        echo "- **构建时间**: $(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
-        echo "- **触发方式**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **提交**: ${GITHUB_SHA:0:7}" >> $GITHUB_STEP_SUMMARY
+        echo "**Latest Commit**: ${{ env.commit_msg }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
-        echo "## 📦 下载链接" >> $GITHUB_STEP_SUMMARY
-        echo "构件已上传至 GitHub Actions Artifacts，可在右侧「Artifacts」区域下载：" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # 检查各平台构建结果
-        echo "### 可用平台:" >> $GITHUB_STEP_SUMMARY
-        
-        # 检查Windows文件
-        if ls ./artifacts/CatSeedLogin_v${VERSION}_windows.dll 1> /dev/null 2>&1; then
-          echo "- ✅ Windows (x64) - CatSeedLogin_v${VERSION}_windows.dll" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ❌ Windows 构建失败" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        # 检查Linux文件
-        if ls ./artifacts/CatSeedLogin_v${VERSION}_linux.so 1> /dev/null 2>&1; then
-          echo "- ✅ Linux (x64) - CatSeedLogin_v${VERSION}_linux.so" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ❌ Linux 构建失败" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        # 检查macOS文件
-        if ls ./artifacts/CatSeedLogin_v${VERSION}_macos.dylib 1> /dev/null 2>&1; then
-          echo "- ✅ macOS (x64) - CatSeedLogin_v${VERSION}_macos.dylib" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ❌ macOS 构建失败" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "## 🚀 使用说明" >> $GITHUB_STEP_SUMMARY
-        echo "1. 下载对应平台的库文件" >> $GITHUB_STEP_SUMMARY
-        echo "2. 将文件放入 Pumpkin 服务器的 plugins 目录" >> $GITHUB_STEP_SUMMARY
-        echo "3. 重启服务器" >> $GITHUB_STEP_SUMMARY
-        
-        # 同时输出到日志
-        echo "构建完成: CatSeedLogin v${VERSION}"
-        echo "最近一次提交: ${COMMIT_MESSAGE}"
+        echo "**Available Downloads**: Check Artifacts section" >> $GITHUB_STEP_SUMMARY
