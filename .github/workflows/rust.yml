@@ -26,11 +26,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Get version
-      run: |
-        VERSION=$(grep -E '^version\s*=' Cargo.toml | cut -d'"' -f2)
-        echo "version=$VERSION" >> $GITHUB_ENV
-
     - name: Build
       run: cargo build --release
 
@@ -43,6 +38,6 @@ jobs:
 
     - uses: actions/upload-artifact@v4
       with:
-        name: CatSeedLogin-${{ env.version }}-${{ matrix.os }}
+        name: CatSeedLogin-${{ matrix.os }}
         path: dist/CatSeedLogin.*
         retention-days: 90
