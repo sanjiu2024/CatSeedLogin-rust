@@ -31,12 +31,8 @@ jobs:
         VERSION=$(grep -E '^version\s*=' Cargo.toml | cut -d'"' -f2)
         echo "version=$VERSION" >> $GITHUB_ENV
 
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: stable
-        profile: minimal
-
-    - run: cargo build --release
+    - name: Build
+      run: cargo build --release
 
     - name: Copy artifact
       run: |
