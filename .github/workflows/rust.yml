@@ -29,14 +29,10 @@ jobs:
     - name: Build
       run: cargo build --release
 
-    - name: Copy artifact
-      run: |
-        if [[ "${{ matrix.os }}" == windows* ]]; then EXT=dll
-        elif [[ "${{ matrix.os }}" == ubuntu* ]]; then EXT=so
-        else EXT=dylib; fi
-        find target/release -name "*.$EXT" -exec cp {} dist/CatSeedLogin.$EXT \;
-
     - uses: actions/upload-artifact@v4
       with:
         name: CatSeedLogin-${{ matrix.os }}
-        path: dist/CatSeedLogin.*
+        path: |
+          target/release/*.dll
+          target/release/*.dylib
+          target/release/*.so
